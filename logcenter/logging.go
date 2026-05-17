@@ -1,0 +1,95 @@
+package logcenter
+
+import "context"
+
+func (client *Client) Debug(ctx context.Context, message string, fields Fields) bool {
+	return client.log(ctx, LevelDebug, message, fields)
+}
+
+func (client *Client) Info(ctx context.Context, message string, fields Fields) bool {
+	return client.log(ctx, LevelInfo, message, fields)
+}
+
+func (client *Client) Warn(ctx context.Context, message string, fields Fields) bool {
+	return client.log(ctx, LevelWarn, message, fields)
+}
+
+func (client *Client) ErrorLog(ctx context.Context, message string, fields Fields) bool {
+	return client.log(ctx, LevelError, message, fields)
+}
+
+func (client *Client) log(ctx context.Context, level, message string, fields Fields) bool {
+	request, _ := RequestFromContext(ctx)
+	return client.enqueue(Event{
+		EventType: EventTypeLogEvent,
+		RequestID: request.RequestID,
+		TraceID:   request.TraceID,
+		SpanID:    request.SpanID,
+		UserID:    request.UserID,
+		TenantID:  request.TenantID,
+		Operation: request.Operation,
+		Level:     level,
+		Message:   message,
+		Metadata:  fields,
+	})
+}
+
+func (client *Client) RecordError(ctx context.Context, err error, options ErrorOptions) bool {
+	request, _ := RequestFromContext(ctx)
+	message := options.Message
+	if err != nil {
+		message = err.Error()
+	}
+	severity := options.Severity
+	if severity == "" {
+		severity = SeverityError
+	}
+
+	return client.enqueue(Event{
+		EventType:    EventTypeErrorEvent,
+		RequestID:    request.RequestID,
+		TraceID:      request.TraceID,
+		SpanID:       request.SpanID,
+		UserID:       request.UserID,
+		TenantID:     request.TenantID,
+		Operation:    request.Operation,
+		Severity:     severity,
+		ErrorType:    options.Type,
+		ErrorCode:    options.Code,
+		ErrorMessage: message,
+		Fingerprint:  options.Fingerprint,
+		StackTrace:   options.StackTrace,
+		Metadata:     options.Metadata,
+	})
+}
+
+func (client *Client) Error(ctx context.Context, err error, options ErrorOptions) bool {
+	return client.RecordError(ctx, err, options)
+}
+
+func (client *Client) Audit(ctx context.Context, audit AuditEvent) bool {
+	request, _ := RequestFromContext(ctx)
+	operation := audit.Operation
+	if operation == "" {
+		operation = request.Operation
+	}
+
+	return client.enqueue(Event{
+		EventType:  EventTypeAuditEvent,
+		RequestID:  request.RequestID,
+		TraceID:    request.TraceID,
+		ActorType:  audit.ActorType,
+		ActorID:    audit.ActorID,
+		TenantID:   audit.TenantID,
+		Operation:  operation,
+		Action:     audit.Action,
+		EntityType: audit.EntityType,
+		EntityID:   audit.EntityID,
+		FieldName:  audit.FieldName,
+		OldValue:   audit.OldValue,
+		NewValue:   audit.NewValue,
+		Changes:    audit.Changes,
+		Reason:     audit.Reason,
+		Metadata:   audit.Metadata,
+	})
+}
