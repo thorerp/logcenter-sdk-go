@@ -18,6 +18,14 @@ func (client *Client) ErrorLog(ctx context.Context, message string, fields Field
 	return client.log(ctx, LevelError, message, fields)
 }
 
+func (client *Client) Fatal(ctx context.Context, message string, fields Fields) bool {
+	return client.log(ctx, LevelFatal, message, fields)
+}
+
+func (client *Client) Log(ctx context.Context, level, message string, fields Fields) bool {
+	return client.log(ctx, level, message, fields)
+}
+
 func (client *Client) log(ctx context.Context, level, message string, fields Fields) bool {
 	request, _ := RequestFromContext(ctx)
 	return client.enqueue(Event{
@@ -60,6 +68,7 @@ func (client *Client) RecordError(ctx context.Context, err error, options ErrorO
 		Fingerprint:  options.Fingerprint,
 		StackTrace:   options.StackTrace,
 		Metadata:     options.Metadata,
+		Data:         options.Data,
 	})
 }
 
@@ -91,5 +100,6 @@ func (client *Client) Audit(ctx context.Context, audit AuditEvent) bool {
 		Changes:    audit.Changes,
 		Reason:     audit.Reason,
 		Metadata:   audit.Metadata,
+		Data:       audit.Data,
 	})
 }

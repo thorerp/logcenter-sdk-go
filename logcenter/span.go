@@ -15,6 +15,7 @@ type Span struct {
 	parentSpanID string
 	startedAt    time.Time
 	metadata     Fields
+	data         Fields
 
 	mu           sync.Mutex
 	errorCode    string
@@ -33,6 +34,12 @@ func SpanKind(kind string) SpanOption {
 func SpanMetadata(fields Fields) SpanOption {
 	return func(span *Span) {
 		span.metadata = fields
+	}
+}
+
+func SpanData(fields Fields) SpanOption {
+	return func(span *Span) {
+		span.data = fields
 	}
 }
 
@@ -109,5 +116,6 @@ func (span *Span) End(status string) bool {
 		ErrorCode:    errorCode,
 		ErrorMessage: errorMessage,
 		Metadata:     span.metadata,
+		Data:         span.data,
 	})
 }

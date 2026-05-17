@@ -72,6 +72,7 @@ type Event struct {
 	NewValue       any    `json:"new_value,omitempty"`
 	Reason         string `json:"reason,omitempty"`
 	Metadata       Fields `json:"metadata,omitempty"`
+	Data           Fields `json:"data,omitempty"`
 }
 
 type Change struct {
@@ -88,6 +89,7 @@ type ErrorOptions struct {
 	StackTrace  string
 	Message     string
 	Metadata    Fields
+	Data        Fields
 }
 
 type AuditEvent struct {
@@ -104,6 +106,7 @@ type AuditEvent struct {
 	Changes    []Change
 	Reason     string
 	Metadata   Fields
+	Data       Fields
 }
 
 type batchRequest struct {

@@ -49,6 +49,32 @@ func (client *Client) Stats() Stats {
 	return client.stats.snapshot()
 }
 
+func (client *Client) SendEvent(ctx context.Context, event Event) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	request, _ := RequestFromContext(ctx)
+	if event.RequestID == "" {
+		event.RequestID = request.RequestID
+	}
+	if event.TraceID == "" {
+		event.TraceID = request.TraceID
+	}
+	if event.SpanID == "" {
+		event.SpanID = request.SpanID
+	}
+	if event.UserID == "" {
+		event.UserID = request.UserID
+	}
+	if event.TenantID == "" {
+		event.TenantID = request.TenantID
+	}
+	if event.Operation == "" {
+		event.Operation = request.Operation
+	}
+	return client.enqueue(event)
+}
+
 func (client *Client) Flush(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()

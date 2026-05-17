@@ -107,6 +107,7 @@ func redactEvent(event Event) Event {
 	event.StackTrace = RedactString(event.StackTrace)
 	event.Reason = RedactString(event.Reason)
 	event.Metadata = RedactFields(event.Metadata)
+	event.Data = RedactFields(event.Data)
 	event.Changes = RedactValue(event.Changes)
 	event.OldValue = RedactNamedValue(event.FieldName, event.OldValue)
 	event.NewValue = RedactNamedValue(event.FieldName, event.NewValue)

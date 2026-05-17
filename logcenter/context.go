@@ -19,6 +19,42 @@ func ContextWithRequest(ctx context.Context, values RequestContext) context.Cont
 	return context.WithValue(ctx, requestContextKey, values)
 }
 
+func ContextWithRequestID(ctx context.Context, requestID string) context.Context {
+	values, _ := RequestFromContext(ctx)
+	values.RequestID = requestID
+	return ContextWithRequest(ctx, values)
+}
+
+func ContextWithTraceID(ctx context.Context, traceID string) context.Context {
+	values, _ := RequestFromContext(ctx)
+	values.TraceID = traceID
+	return ContextWithRequest(ctx, values)
+}
+
+func ContextWithSpanID(ctx context.Context, spanID string) context.Context {
+	values, _ := RequestFromContext(ctx)
+	values.SpanID = spanID
+	return ContextWithRequest(ctx, values)
+}
+
+func ContextWithOperation(ctx context.Context, operation string) context.Context {
+	values, _ := RequestFromContext(ctx)
+	values.Operation = operation
+	return ContextWithRequest(ctx, values)
+}
+
+func ContextWithUser(ctx context.Context, userID string) context.Context {
+	values, _ := RequestFromContext(ctx)
+	values.UserID = userID
+	return ContextWithRequest(ctx, values)
+}
+
+func ContextWithTenant(ctx context.Context, tenantID string) context.Context {
+	values, _ := RequestFromContext(ctx)
+	values.TenantID = tenantID
+	return ContextWithRequest(ctx, values)
+}
+
 func RequestFromContext(ctx context.Context) (RequestContext, bool) {
 	values, ok := ctx.Value(requestContextKey).(RequestContext)
 	return values, ok
