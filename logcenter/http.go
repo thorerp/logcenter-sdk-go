@@ -14,6 +14,8 @@ type httpMiddlewareConfig struct {
 	tenantIDFunc      func(*http.Request) string
 	metadataFunc      func(*http.Request) Fields
 	dataFunc          func(*http.Request) Fields
+	bodyCaptureFunc   func(*http.Request) bool
+	bodyCapture       RequestBodyCaptureOptions
 }
 
 func HTTPRouteTemplate(routeTemplate string) HTTPMiddlewareOption {
@@ -49,6 +51,22 @@ func HTTPMetadataFunc(fn func(*http.Request) Fields) HTTPMiddlewareOption {
 func HTTPDataFunc(fn func(*http.Request) Fields) HTTPMiddlewareOption {
 	return func(config *httpMiddlewareConfig) {
 		config.dataFunc = fn
+	}
+}
+
+func HTTPRequestBodyCapture(maxBytes int64, contentTypes ...string) HTTPMiddlewareOption {
+	return HTTPRequestBodyCaptureFunc(func(*http.Request) bool {
+		return true
+	}, maxBytes, contentTypes...)
+}
+
+func HTTPRequestBodyCaptureFunc(fn func(*http.Request) bool, maxBytes int64, contentTypes ...string) HTTPMiddlewareOption {
+	return func(config *httpMiddlewareConfig) {
+		config.bodyCaptureFunc = fn
+		config.bodyCapture = RequestBodyCaptureOptions{
+			MaxBytes:     maxBytes,
+			ContentTypes: append([]string(nil), contentTypes...),
+		}
 	}
 }
 
@@ -164,10 +182,20 @@ func (config httpMiddlewareConfig) metadata(r *http.Request) Fields {
 }
 
 func (config httpMiddlewareConfig) data(r *http.Request) Fields {
+	data := Fields(nil)
 	if config.dataFunc == nil {
-		return nil
+		data = nil
+	} else {
+		data = config.dataFunc(r)
 	}
-	return config.dataFunc(r)
+	if config.bodyCaptureFunc == nil || !config.bodyCaptureFunc(r) {
+		return data
+	}
+	body, ok := CaptureHTTPRequestBody(r, config.bodyCapture)
+	if !ok {
+		return data
+	}
+	return mergeFields(data, body)
 }
 
 func mergeFields(left, right Fields) Fields {

@@ -8,6 +8,8 @@ import (
 func TestRedactFieldsMasksSensitiveKeys(t *testing.T) {
 	fields := Fields{
 		"password": "secret",
+		"cpf":      "123",
+		"email":    "user@example.invalid",
 		"nested": Fields{
 			"api_key": "test-secret-value",
 			"safe":    "visible",
@@ -20,6 +22,9 @@ func TestRedactFieldsMasksSensitiveKeys(t *testing.T) {
 	if redacted["password"] != redactedValue {
 		t.Fatalf("password = %v, want redacted", redacted["password"])
 	}
+	if redacted["cpf"] != redactedValue || redacted["email"] != redactedValue {
+		t.Fatalf("expanded sensitive fields were not redacted: %#v", redacted)
+	}
 	if nested["api_key"] != redactedValue {
 		t.Fatalf("api_key = %v, want redacted", nested["api_key"])
 	}
@@ -29,9 +34,9 @@ func TestRedactFieldsMasksSensitiveKeys(t *testing.T) {
 }
 
 func TestRedactStringMasksAssignmentsAndBearer(t *testing.T) {
-	redacted := RedactString("token=abc Authorization: Bearer clear")
+	redacted := RedactString(`token=abc Authorization: Bearer clear "api_key":"secret"`)
 
-	if strings.Contains(redacted, "abc") || strings.Contains(redacted, "clear") {
+	if strings.Contains(redacted, "abc") || strings.Contains(redacted, "clear") || strings.Contains(redacted, "secret") {
 		t.Fatalf("redacted string = %q, still contains secret", redacted)
 	}
 }

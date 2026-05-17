@@ -63,6 +63,9 @@ func (client *Client) StartRequest(ctx context.Context, options RequestStartOpti
 	if requestContext.Operation == "" && (options.Method != "" || options.Path != "") {
 		requestContext.Operation = options.Method + " " + options.Path
 	}
+	if requestContext.Operation == "" {
+		requestContext.Operation = "request"
+	}
 
 	startedAt := options.StartedAt
 	if startedAt.IsZero() {
@@ -101,12 +104,17 @@ func (client *Client) StartRequest(ctx context.Context, options RequestStartOpti
 }
 
 func (request *Request) End(options RequestEndOptions) bool {
+	return request.EndWithContext(context.Background(), options)
+}
+
+func (request *Request) EndWithContext(ctx context.Context, options RequestEndOptions) bool {
 	request.mu.Lock()
 	if request.ended {
 		request.mu.Unlock()
 		return false
 	}
 	request.ended = true
+	requestContext := request.context
 	request.mu.Unlock()
 
 	status := options.Status
@@ -121,15 +129,16 @@ func (request *Request) End(options RequestEndOptions) bool {
 	if duration < 0 {
 		duration = 0
 	}
+	requestContext = mergeRequestContext(requestContext, ctx)
 
 	return request.client.enqueue(Event{
 		EventType:     EventTypeRequestFinished,
-		RequestID:     request.context.RequestID,
-		TraceID:       request.context.TraceID,
-		SpanID:        request.context.SpanID,
-		UserID:        request.context.UserID,
-		TenantID:      request.context.TenantID,
-		Operation:     request.context.Operation,
+		RequestID:     requestContext.RequestID,
+		TraceID:       requestContext.TraceID,
+		SpanID:        requestContext.SpanID,
+		UserID:        requestContext.UserID,
+		TenantID:      requestContext.TenantID,
+		Operation:     requestContext.Operation,
 		Status:        status,
 		Method:        request.method,
 		Path:          request.path,

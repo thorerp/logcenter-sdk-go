@@ -7,51 +7,92 @@ import (
 
 const redactedValue = "[REDACTED]"
 
-var sensitiveKeyFragments = []string{
+var defaultSensitiveKeyFragments = []string{
 	"password",
 	"senha",
 	"token",
 	"authorization",
 	"cookie",
 	"secret",
+	"secret_key",
+	"client_secret",
 	"api_key",
 	"apikey",
 	"private_key",
 	"pfx",
+	"certificate",
 	"certificate_password",
+	"certificado",
+	"senha_certificado",
+	"base64",
+	"file",
+	"arquivo",
+	"document",
+	"pdf",
+	"xml",
+	"logo",
+	"stripe",
+	"csrt",
+	"chave_acesso",
+	"cpf",
+	"cnpj",
+	"email",
+	"phone",
+	"telefone",
 	"cvv",
 }
 
 var (
-	sensitivePairPattern = regexp.MustCompile(`(?i)\b(password|senha|token|secret|api[_-]?key|apikey|authorization|cookie)\b\s*[:=]\s*("[^"]*"|'[^']*'|[^,;\s]+)`)
-	bearerPattern        = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`)
+	defaultRedactor = newRedactor(nil)
+	bearerPattern   = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`)
 )
 
+type redactor struct {
+	fragments   []string
+	pairPattern *regexp.Regexp
+}
+
+func newRedactor(extraFragments []string) redactor {
+	fragments := normalizeFragments(append(defaultSensitiveKeyFragments, extraFragments...))
+	return redactor{
+		fragments:   fragments,
+		pairPattern: sensitivePairPattern(fragments),
+	}
+}
+
 func RedactFields(fields Fields) Fields {
+	return defaultRedactor.RedactFields(fields)
+}
+
+func (redactor redactor) RedactFields(fields Fields) Fields {
 	if fields == nil {
 		return nil
 	}
 	redacted := make(Fields, len(fields))
 	for key, value := range fields {
-		if IsSensitiveKey(key) {
+		if redactor.IsSensitiveKey(key) {
 			redacted[key] = redactedValue
 			continue
 		}
-		redacted[key] = RedactValue(value)
+		redacted[key] = redactor.RedactValue(value)
 	}
 	return redacted
 }
 
 func RedactValue(value any) any {
+	return defaultRedactor.RedactValue(value)
+}
+
+func (redactor redactor) RedactValue(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:
-		return RedactFields(Fields(typed))
+		return redactor.RedactFields(Fields(typed))
 	case Fields:
-		return RedactFields(typed)
+		return redactor.RedactFields(typed)
 	case []any:
 		values := make([]any, len(typed))
 		for i, item := range typed {
-			values[i] = RedactValue(item)
+			values[i] = redactor.RedactValue(item)
 		}
 		return values
 	case []Change:
@@ -59,29 +100,42 @@ func RedactValue(value any) any {
 		for i, change := range typed {
 			values[i] = Change{
 				Field:    change.Field,
-				OldValue: RedactNamedValue(change.Field, change.OldValue),
-				NewValue: RedactNamedValue(change.Field, change.NewValue),
+				OldValue: redactor.RedactNamedValue(change.Field, change.OldValue),
+				NewValue: redactor.RedactNamedValue(change.Field, change.NewValue),
 			}
 		}
 		return values
+	case string:
+		return redactor.RedactString(typed)
 	default:
 		return value
 	}
 }
 
 func RedactNamedValue(name string, value any) any {
+	return defaultRedactor.RedactNamedValue(name, value)
+}
+
+func (redactor redactor) RedactNamedValue(name string, value any) any {
 	if value == nil {
 		return nil
 	}
-	if IsSensitiveKey(name) {
+	if redactor.IsSensitiveKey(name) {
 		return redactedValue
 	}
-	return RedactValue(value)
+	return redactor.RedactValue(value)
 }
 
 func RedactString(value string) string {
+	return defaultRedactor.RedactString(value)
+}
+
+func (redactor redactor) RedactString(value string) string {
 	value = bearerPattern.ReplaceAllString(value, "Bearer "+redactedValue)
-	value = sensitivePairPattern.ReplaceAllStringFunc(value, func(match string) string {
+	if redactor.pairPattern == nil {
+		return value
+	}
+	value = redactor.pairPattern.ReplaceAllStringFunc(value, func(match string) string {
 		separatorIndex := strings.IndexAny(match, ":=")
 		if separatorIndex == -1 {
 			return redactedValue
@@ -92,8 +146,12 @@ func RedactString(value string) string {
 }
 
 func IsSensitiveKey(key string) bool {
+	return defaultRedactor.IsSensitiveKey(key)
+}
+
+func (redactor redactor) IsSensitiveKey(key string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(key))
-	for _, fragment := range sensitiveKeyFragments {
+	for _, fragment := range redactor.fragments {
 		if strings.Contains(normalized, fragment) {
 			return true
 		}
@@ -102,14 +160,47 @@ func IsSensitiveKey(key string) bool {
 }
 
 func redactEvent(event Event) Event {
-	event.Message = RedactString(event.Message)
-	event.ErrorMessage = RedactString(event.ErrorMessage)
-	event.StackTrace = RedactString(event.StackTrace)
-	event.Reason = RedactString(event.Reason)
-	event.Metadata = RedactFields(event.Metadata)
-	event.Data = RedactFields(event.Data)
-	event.Changes = RedactValue(event.Changes)
-	event.OldValue = RedactNamedValue(event.FieldName, event.OldValue)
-	event.NewValue = RedactNamedValue(event.FieldName, event.NewValue)
+	return defaultRedactor.redactEvent(event)
+}
+
+func (redactor redactor) redactEvent(event Event) Event {
+	event.Message = redactor.RedactString(event.Message)
+	event.ErrorMessage = redactor.RedactString(event.ErrorMessage)
+	event.StackTrace = redactor.RedactString(event.StackTrace)
+	event.Reason = redactor.RedactString(event.Reason)
+	event.Metadata = redactor.RedactFields(event.Metadata)
+	event.Data = redactor.RedactFields(event.Data)
+	event.Changes = redactor.RedactValue(event.Changes)
+	event.OldValue = redactor.RedactNamedValue(event.FieldName, event.OldValue)
+	event.NewValue = redactor.RedactNamedValue(event.FieldName, event.NewValue)
 	return event
+}
+
+func normalizeFragments(fragments []string) []string {
+	seen := map[string]struct{}{}
+	normalized := make([]string, 0, len(fragments))
+	for _, fragment := range fragments {
+		fragment = strings.ToLower(strings.TrimSpace(fragment))
+		if fragment == "" {
+			continue
+		}
+		if _, ok := seen[fragment]; ok {
+			continue
+		}
+		seen[fragment] = struct{}{}
+		normalized = append(normalized, fragment)
+	}
+	return normalized
+}
+
+func sensitivePairPattern(fragments []string) *regexp.Regexp {
+	quoted := make([]string, 0, len(fragments))
+	for _, fragment := range fragments {
+		quoted = append(quoted, regexp.QuoteMeta(fragment))
+	}
+	if len(quoted) == 0 {
+		return nil
+	}
+	pattern := `(?i)(["']?(?:` + strings.Join(quoted, "|") + `)["']?)\s*[:=]\s*("[^"]*"|'[^']*'|[^,;\s}\]]+)`
+	return regexp.MustCompile(pattern)
 }

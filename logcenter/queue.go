@@ -8,6 +8,12 @@ type eventQueue struct {
 	capacity int
 }
 
+type queuePushResult struct {
+	queued     bool
+	dropped    *Event
+	dropReason string
+}
+
 func newEventQueue(capacity int) *eventQueue {
 	return &eventQueue{
 		events:   make([]Event, 0, capacity),
@@ -15,28 +21,32 @@ func newEventQueue(capacity int) *eventQueue {
 	}
 }
 
-func (queue *eventQueue) push(event Event) (bool, bool) {
+func (queue *eventQueue) push(event Event) queuePushResult {
 	queue.mu.Lock()
 	defer queue.mu.Unlock()
 
 	if len(queue.events) < queue.capacity {
 		queue.events = append(queue.events, event)
-		return true, false
+		return queuePushResult{queued: true}
 	}
 
 	if isDroppable(event) {
-		return false, true
+		dropped := event
+		return queuePushResult{dropped: &dropped, dropReason: "buffer_full"}
 	}
 
 	if index := queue.indexOfDroppable(LevelDebug); index >= 0 {
+		dropped := queue.events[index]
 		queue.events[index] = event
-		return true, true
+		return queuePushResult{queued: true, dropped: &dropped, dropReason: "buffer_replaced"}
 	}
 	if index := queue.indexOfDroppable(LevelInfo); index >= 0 {
+		dropped := queue.events[index]
 		queue.events[index] = event
-		return true, true
+		return queuePushResult{queued: true, dropped: &dropped, dropReason: "buffer_replaced"}
 	}
-	return false, true
+	dropped := event
+	return queuePushResult{dropped: &dropped, dropReason: "buffer_full"}
 }
 
 func (queue *eventQueue) drain(max int) []Event {

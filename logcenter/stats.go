@@ -6,16 +6,16 @@ import (
 )
 
 type Stats struct {
-	Queued        uint64
-	Dropped       uint64
-	SentEvents    uint64
-	SentBatches   uint64
-	FailedEvents  uint64
-	FailedBatches uint64
-	Accepted      uint64
-	Duplicated    uint64
-	Rejected      uint64
-	LastError     string
+	Queued        uint64 `json:"queued"`
+	Dropped       uint64 `json:"dropped"`
+	SentEvents    uint64 `json:"sent_events"`
+	SentBatches   uint64 `json:"sent_batches"`
+	FailedEvents  uint64 `json:"failed_events"`
+	FailedBatches uint64 `json:"failed_batches"`
+	Accepted      uint64 `json:"accepted"`
+	Duplicated    uint64 `json:"duplicated"`
+	Rejected      uint64 `json:"rejected"`
+	LastError     string `json:"last_error,omitempty"`
 }
 
 type counters struct {
@@ -52,11 +52,14 @@ func (counters *counters) snapshot() Stats {
 	}
 }
 
-func (counters *counters) setError(err error) {
+func (counters *counters) setError(err error) (string, bool) {
 	if err == nil {
-		return
+		return "", false
 	}
+	next := err.Error()
 	counters.mu.Lock()
-	counters.lastError = err.Error()
+	changed := counters.lastError != next
+	counters.lastError = next
 	counters.mu.Unlock()
+	return next, changed
 }

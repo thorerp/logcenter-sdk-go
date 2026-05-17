@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,6 +103,56 @@ func TestFlushHonorsTimeout(t *testing.T) {
 	}
 }
 
+func TestFlushHonorsDedicatedSendTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := logcenter.NewClient(logcenter.Config{
+		Endpoint:      server.URL,
+		APIKey:        "test-api-key",
+		Timeout:       time.Second,
+		SendTimeout:   10 * time.Millisecond,
+		FlushInterval: time.Hour,
+		BufferSize:    10,
+		BatchSize:     10,
+	})
+	defer client.Close(context.Background())
+
+	client.Warn(context.Background(), "slow endpoint", nil)
+	err := client.Flush(context.Background())
+	if err == nil {
+		t.Fatal("Flush() error = nil, want send timeout")
+	}
+}
+
+func TestFlushHonorsDedicatedFlushTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := logcenter.NewClient(logcenter.Config{
+		Endpoint:      server.URL,
+		APIKey:        "test-api-key",
+		SendTimeout:   time.Second,
+		FlushTimeout:  10 * time.Millisecond,
+		FlushInterval: time.Hour,
+		BufferSize:    10,
+		BatchSize:     10,
+	})
+	defer client.Close(context.Background())
+
+	client.Warn(context.Background(), "slow flush", nil)
+	err := client.Flush(context.Background())
+	if err == nil {
+		t.Fatal("Flush() error = nil, want flush timeout")
+	}
+}
+
 func TestFlushRequiresEndpoint(t *testing.T) {
 	client := logcenter.NewClient(logcenter.Config{
 		APIKey:        "test-api-key",
@@ -123,7 +175,7 @@ func TestFlushRequiresEndpoint(t *testing.T) {
 	}
 }
 
-func TestBufferFullDropsDebugButPreservesError(t *testing.T) {
+func TestSendEventSyncSendsImmediatelyWithoutFlush(t *testing.T) {
 	received := make(chan capturedBatch, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var batch capturedBatch
@@ -138,24 +190,415 @@ func TestBufferFullDropsDebugButPreservesError(t *testing.T) {
 	client := logcenter.NewClient(logcenter.Config{
 		Endpoint:      server.URL,
 		APIKey:        "test-api-key",
+		Environment:   "test",
+		Service:       "sync-api",
 		FlushInterval: time.Hour,
-		BufferSize:    1,
+		BufferSize:    10,
 		BatchSize:     10,
 	})
 	defer client.Close(context.Background())
 
-	client.Debug(context.Background(), "debug", nil)
-	client.RecordError(context.Background(), errors.New("boom"), logcenter.ErrorOptions{Code: "BOOM"})
+	ctx := logcenter.ContextWithRequest(context.Background(), logcenter.RequestContext{
+		RequestID: "req_sync",
+		TraceID:   "trc_sync",
+		Operation: "sync-event",
+	})
+	err := client.SendEventSync(ctx, logcenter.Event{
+		EventType: logcenter.EventTypeLogEvent,
+		Level:     logcenter.LevelInfo,
+		Message:   "sync event",
+	})
+	if err != nil {
+		t.Fatalf("SendEventSync() error = %v", err)
+	}
+
+	batch := <-received
+	if len(batch.Events) != 1 {
+		t.Fatalf("events = %d, want 1", len(batch.Events))
+	}
+	event := batch.Events[0]
+	if event.RequestID != "req_sync" || event.TraceID != "trc_sync" || event.Operation != "sync-event" {
+		t.Fatalf("event = %#v, want context fields", event)
+	}
+	if stats := client.Stats(); stats.Queued != 0 || stats.SentEvents != 1 || stats.Accepted != 1 {
+		t.Fatalf("stats = %#v, want direct send without queue", stats)
+	}
+}
+
+func TestAuditSyncSendsAuditEvent(t *testing.T) {
+	received := make(chan capturedBatch, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var batch capturedBatch
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			t.Fatalf("decode batch: %v", err)
+		}
+		received <- batch
+		_, _ = w.Write([]byte(`{"batch_id":"ok","received":1,"accepted":1,"duplicated":0,"rejected":0,"errors":[]}`))
+	}))
+	defer server.Close()
+
+	client := logcenter.NewClient(logcenter.Config{
+		Endpoint:      server.URL,
+		APIKey:        "test-api-key",
+		Environment:   "test",
+		Service:       "sync-api",
+		FlushInterval: time.Hour,
+		BufferSize:    10,
+		BatchSize:     10,
+	})
+	defer client.Close(context.Background())
+
+	ctx := logcenter.ContextWithTenant(context.Background(), "tenant-from-context")
+	err := client.AuditSync(ctx, logcenter.AuditEvent{
+		ActorType:  "user",
+		ActorID:    "user-123",
+		Action:     "order.approved",
+		EntityType: "order",
+		EntityID:   "order-123",
+		Changes: []logcenter.Change{
+			{Field: "status", OldValue: "pending", NewValue: "approved"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("AuditSync() error = %v", err)
+	}
+
+	event := (<-received).Events[0]
+	if event.EventType != logcenter.EventTypeAuditEvent || event.Action != "order.approved" || event.TenantID != "tenant-from-context" {
+		t.Fatalf("event = %#v, want audit event with context tenant", event)
+	}
+}
+
+func TestSendEventSyncReturnsAPIRejection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"batch_id":"ok","received":1,"accepted":0,"duplicated":0,"rejected":1,"errors":[{"index":0,"event_id":"evt_rejected","code":"INVALID","message":"invalid event"}]}`))
+	}))
+	defer server.Close()
+
+	client := logcenter.NewClient(logcenter.Config{
+		Endpoint:      server.URL,
+		APIKey:        "test-api-key",
+		Environment:   "test",
+		Service:       "sync-api",
+		FlushInterval: time.Hour,
+		BufferSize:    10,
+		BatchSize:     10,
+	})
+	defer client.Close(context.Background())
+
+	err := client.SendEventSync(context.Background(), logcenter.Event{
+		EventType: logcenter.EventTypeLogEvent,
+		Level:     logcenter.LevelInfo,
+		Message:   "rejected remotely",
+	})
+	if err == nil || !strings.Contains(err.Error(), "rejected") {
+		t.Fatalf("SendEventSync() error = %v, want rejection error", err)
+	}
+	if stats := client.Stats(); stats.Rejected != 1 || !strings.Contains(stats.LastError, "rejected") {
+		t.Fatalf("stats = %#v, want rejected sync event", stats)
+	}
+}
+
+func TestNoopClientDoesNotQueueFlushOrFail(t *testing.T) {
+	client := logcenter.NewNoopClient()
+
+	if client.Enabled() {
+		t.Fatal("Enabled() = true, want false")
+	}
+	if client.Info(context.Background(), "ignored", nil) {
+		t.Fatal("Info() = true, want false for noop client")
+	}
+	if client.SendEvent(context.Background(), logcenter.Event{
+		EventType: logcenter.EventTypeLogEvent,
+		Level:     logcenter.LevelInfo,
+		Message:   "ignored",
+	}) {
+		t.Fatal("SendEvent() = true, want false for noop client")
+	}
+
+	ctx, request := client.StartRequest(context.Background(), logcenter.RequestStartOptions{
+		Operation: "noop operation",
+	})
+	if client.Warn(ctx, "ignored", nil) {
+		t.Fatal("Warn() = true, want false for noop client")
+	}
+	if request.End(logcenter.RequestEndOptions{}) {
+		t.Fatal("Request.End() = true, want false for noop client")
+	}
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v, want nil", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+
+	if stats := client.Stats(); stats != (logcenter.Stats{}) {
+		t.Fatalf("stats = %#v, want zero values", stats)
+	}
+}
+
+func TestDisabledConfigDoesNotRequireEndpointOrAPIKey(t *testing.T) {
+	client := logcenter.NewClient(logcenter.Config{
+		Enabled: logcenter.Bool(false),
+	})
+
+	if client.Enabled() {
+		t.Fatal("Enabled() = true, want false")
+	}
+	if client.Error(context.Background(), errors.New("ignored"), logcenter.ErrorOptions{Code: "IGNORED"}) {
+		t.Fatal("Error() = true, want false for disabled client")
+	}
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v, want nil", err)
+	}
+}
+
+func TestInvalidEventIsRejectedBeforeQueue(t *testing.T) {
+	client := logcenter.NewClient(logcenter.Config{
+		Endpoint:      "<logcenter-endpoint>",
+		APIKey:        "test-api-key",
+		FlushInterval: time.Hour,
+		BufferSize:    10,
+		BatchSize:     10,
+	})
+	defer client.Close(context.Background())
+
+	queued := client.SendEvent(context.Background(), logcenter.Event{
+		EventType: logcenter.EventTypeLogEvent,
+		Level:     logcenter.LevelInfo,
+	})
+	if queued {
+		t.Fatal("SendEvent() = true, want false for invalid event")
+	}
+
+	stats := client.Stats()
+	if stats.Dropped != 1 {
+		t.Fatalf("Dropped = %d, want 1", stats.Dropped)
+	}
+	if !strings.Contains(stats.LastError, "message") {
+		t.Fatalf("LastError = %q, want message validation error", stats.LastError)
+	}
+}
+
+func TestFailureHooksObserveDroppedEventsBatchFailuresAndErrorChanges(t *testing.T) {
+	droppedEvents := make(chan logcenter.EventDrop, 1)
+	batchFailures := make(chan logcenter.BatchFailure, 1)
+	errorChanges := make(chan logcenter.ErrorChange, 2)
+
+	client := logcenter.NewClient(logcenter.Config{
+		APIKey:        "test-api-key",
+		FlushInterval: time.Hour,
+		BufferSize:    10,
+		BatchSize:     10,
+		Hooks: logcenter.Hooks{
+			OnEventDropped: func(drop logcenter.EventDrop) {
+				droppedEvents <- drop
+			},
+			OnBatchFailed: func(failure logcenter.BatchFailure) {
+				batchFailures <- failure
+			},
+			OnErrorChanged: func(change logcenter.ErrorChange) {
+				errorChanges <- change
+			},
+		},
+	})
+	defer client.Close(context.Background())
+
+	if client.SendEvent(context.Background(), logcenter.Event{
+		EventType: logcenter.EventTypeLogEvent,
+		Level:     logcenter.LevelInfo,
+	}) {
+		t.Fatal("SendEvent() = true, want invalid event dropped")
+	}
+	drop := <-droppedEvents
+	if drop.Reason != "validation" || drop.Err == nil {
+		t.Fatalf("drop = %#v, want validation error", drop)
+	}
+	change := <-errorChanges
+	if !strings.Contains(change.LastError, "message") {
+		t.Fatalf("error change = %#v, want message validation error", change)
+	}
+
+	client.Warn(context.Background(), "missing endpoint", nil)
+	if err := client.Flush(context.Background()); err == nil {
+		t.Fatal("Flush() error = nil, want missing endpoint")
+	}
+	failure := <-batchFailures
+	if failure.EventCount != 1 || failure.Err == nil {
+		t.Fatalf("batch failure = %#v, want failed event count", failure)
+	}
+}
+
+func TestFailureHookObservesRejectedEventsFromAPI(t *testing.T) {
+	rejectedEvents := make(chan logcenter.EventRejection, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"batch_id":"ok","received":1,"accepted":0,"duplicated":0,"rejected":1,"errors":[{"index":0,"event_id":"evt_rejected","code":"INVALID","message":"invalid event"}]}`))
+	}))
+	defer server.Close()
+
+	client := logcenter.NewClient(logcenter.Config{
+		Endpoint:      server.URL,
+		APIKey:        "test-api-key",
+		FlushInterval: time.Hour,
+		BufferSize:    10,
+		BatchSize:     10,
+		Hooks: logcenter.Hooks{
+			OnEventRejected: func(rejection logcenter.EventRejection) {
+				rejectedEvents <- rejection
+			},
+		},
+	})
+	defer client.Close(context.Background())
+
+	client.Info(context.Background(), "will be rejected by API", nil)
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	rejection := <-rejectedEvents
+	if rejection.Event.EventType != logcenter.EventTypeLogEvent || rejection.Error.Code != "INVALID" {
+		t.Fatalf("rejection = %#v, want rejected log event", rejection)
+	}
+}
+
+func TestCustomSensitiveKeyFragmentsRedactClientEvents(t *testing.T) {
+	received := make(chan capturedBatch, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var batch capturedBatch
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			t.Fatalf("decode batch: %v", err)
+		}
+		received <- batch
+		_, _ = w.Write([]byte(`{"batch_id":"ok","received":1,"accepted":1,"duplicated":0,"rejected":0,"errors":[]}`))
+	}))
+	defer server.Close()
+
+	client := logcenter.NewClient(logcenter.Config{
+		Endpoint:              server.URL,
+		APIKey:                "test-api-key",
+		Environment:           "test",
+		Service:               "orders-api",
+		FlushInterval:         time.Hour,
+		BufferSize:            10,
+		BatchSize:             10,
+		SensitiveKeyFragments: []string{"customer_code"},
+	})
+	defer client.Close(context.Background())
+
+	client.Info(context.Background(), "created customer_code=secret", logcenter.Fields{
+		"customer_code": "hidden",
+	})
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	event := (<-received).Events[0]
+	if event.Metadata["customer_code"] != "[REDACTED]" {
+		t.Fatalf("customer_code = %v, want redacted", event.Metadata["customer_code"])
+	}
+	if strings.Contains(event.Message, "secret") {
+		t.Fatalf("message = %q, want custom fragment redacted", event.Message)
+	}
+}
+
+func TestPayloadLimitsTruncateStringsMetadataDataAndAuditValues(t *testing.T) {
+	received := make(chan capturedBatch, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var batch capturedBatch
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			t.Fatalf("decode batch: %v", err)
+		}
+		received <- batch
+		_, _ = w.Write([]byte(`{"batch_id":"ok","received":2,"accepted":2,"duplicated":0,"rejected":0,"errors":[]}`))
+	}))
+	defer server.Close()
+
+	client := logcenter.NewClient(logcenter.Config{
+		Endpoint:           server.URL,
+		APIKey:             "test-api-key",
+		Environment:        "test",
+		Service:            "orders-api",
+		FlushInterval:      time.Hour,
+		BufferSize:         10,
+		BatchSize:          10,
+		MaxStringBytes:     32,
+		MaxMetadataBytes:   80,
+		MaxDataBytes:       80,
+		MaxAuditValueBytes: 80,
+		MaxEventBytes:      2048,
+	})
+	defer client.Close(context.Background())
+
+	longValue := strings.Repeat("x", 200)
+	client.SendEvent(context.Background(), logcenter.Event{
+		EventType: logcenter.EventTypeLogEvent,
+		Level:     logcenter.LevelInfo,
+		Message:   longValue,
+		Metadata: logcenter.Fields{
+			"long_metadata": longValue,
+			"other":         longValue,
+		},
+		Data: logcenter.Fields{
+			"long_data": longValue,
+			"other":     longValue,
+		},
+	})
+	if !client.Audit(context.Background(), logcenter.AuditEvent{
+		Action:     "order.updated",
+		EntityType: "order",
+		EntityID:   "order-123",
+		OldValue:   longValue,
+		NewValue:   longValue,
+	}) {
+		t.Fatalf("Audit() = false, stats = %#v", client.Stats())
+	}
+
 	if err := client.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
 
 	batch := <-received
-	if len(batch.Events) != 1 || batch.Events[0].EventType != logcenter.EventTypeErrorEvent {
-		t.Fatalf("events = %#v, want preserved error event", batch.Events)
+	logEvent := batch.Events[0]
+	if len(logEvent.Message) > 32 || !strings.Contains(logEvent.Message, "[TRUNCATED]") {
+		t.Fatalf("message = %q, want truncated to max string bytes", logEvent.Message)
 	}
-	if stats := client.Stats(); stats.Dropped != 1 {
+	if logEvent.Metadata["_truncated"] != true {
+		t.Fatalf("metadata = %#v, want truncated placeholder", logEvent.Metadata)
+	}
+	if logEvent.Data["_truncated"] != true {
+		t.Fatalf("data = %#v, want truncated placeholder", logEvent.Data)
+	}
+
+	auditEvent := batch.Events[1]
+	if oldValue, ok := auditEvent.OldValue.(string); !ok || len(oldValue) > 32 || !strings.Contains(oldValue, "[TRUNCATED]") {
+		t.Fatalf("old value = %#v, want truncated string", auditEvent.OldValue)
+	}
+}
+
+func TestPayloadLimitsRejectEventThatStillExceedsMaxEventBytes(t *testing.T) {
+	client := logcenter.NewClient(logcenter.Config{
+		Endpoint:         "<logcenter-endpoint>",
+		APIKey:           "test-api-key",
+		FlushInterval:    time.Hour,
+		BufferSize:       10,
+		BatchSize:        10,
+		MaxStringBytes:   64,
+		MaxEventBytes:    40,
+		MaxMetadataBytes: 64,
+		MaxDataBytes:     64,
+	})
+	defer client.Close(context.Background())
+
+	queued := client.Info(context.Background(), "event too large", nil)
+	if queued {
+		t.Fatal("Info() = true, want false for event above max_event_bytes")
+	}
+	stats := client.Stats()
+	if stats.Dropped != 1 {
 		t.Fatalf("Dropped = %d, want 1", stats.Dropped)
+	}
+	if !strings.Contains(stats.LastError, "max_event_bytes") {
+		t.Fatalf("LastError = %q, want max_event_bytes", stats.LastError)
 	}
 }
 
@@ -210,6 +653,106 @@ func TestSendEventCoversRawCollectionFields(t *testing.T) {
 	}
 	if event.Data["api_key"] != "[REDACTED]" {
 		t.Fatalf("data api_key = %v, want redacted", event.Data["api_key"])
+	}
+}
+
+func TestSendEventMapsIdempotencyKeyAndCollectionHints(t *testing.T) {
+	received := make(chan capturedBatch, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var batch capturedBatch
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			t.Fatalf("decode batch: %v", err)
+		}
+		received <- batch
+		_, _ = w.Write([]byte(`{"batch_id":"ok","received":1,"accepted":1,"duplicated":0,"rejected":0,"errors":[]}`))
+	}))
+	defer server.Close()
+
+	client := logcenter.NewClient(logcenter.Config{
+		Endpoint:      server.URL,
+		APIKey:        "test-api-key",
+		Environment:   "production",
+		Service:       "orders-worker",
+		FlushInterval: time.Hour,
+		BufferSize:    10,
+		BatchSize:     10,
+	})
+	defer client.Close(context.Background())
+
+	client.SendEvent(context.Background(), logcenter.Event{
+		IdempotencyKey: "order-123:approved:v1",
+		EventType:      logcenter.EventTypeLogEvent,
+		Classification: logcenter.ClassificationCritical,
+		RetentionHint:  logcenter.RetentionHintLong,
+		Level:          logcenter.LevelInfo,
+		Message:        "order approved",
+	})
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	event := (<-received).Events[0]
+	if event.EventID != "order-123:approved:v1" || event.IdempotencyKey != "order-123:approved:v1" {
+		t.Fatalf("idempotency fields = %q/%q, want key mirrored to event_id", event.EventID, event.IdempotencyKey)
+	}
+	if event.Classification != logcenter.ClassificationCritical || event.RetentionHint != logcenter.RetentionHintLong {
+		t.Fatalf("hints = %q/%q, want critical/long", event.Classification, event.RetentionHint)
+	}
+}
+
+func TestAuditAndOperationEventsCarryCollectionHints(t *testing.T) {
+	received := make(chan capturedBatch, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var batch capturedBatch
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			t.Fatalf("decode batch: %v", err)
+		}
+		received <- batch
+		_, _ = w.Write([]byte(`{"batch_id":"ok","received":2,"accepted":2,"duplicated":0,"rejected":0,"errors":[]}`))
+	}))
+	defer server.Close()
+
+	client := logcenter.NewClient(logcenter.Config{
+		Endpoint:      server.URL,
+		APIKey:        "test-api-key",
+		Environment:   "production",
+		Service:       "orders-worker",
+		FlushInterval: time.Hour,
+		BufferSize:    10,
+		BatchSize:     10,
+	})
+	defer client.Close(context.Background())
+
+	client.Audit(context.Background(), logcenter.AuditEvent{
+		IdempotencyKey: "audit-1",
+		Classification: logcenter.ClassificationAudit,
+		RetentionHint:  logcenter.RetentionHintAudit,
+		Action:         "order.updated",
+		EntityType:     "order",
+		EntityID:       "order-123",
+		Changes: []logcenter.Change{
+			{Field: "status", OldValue: "pending", NewValue: "approved"},
+		},
+	})
+	client.OperationEvent(context.Background(), logcenter.OperationEvent{
+		IdempotencyKey: "step-1",
+		Classification: logcenter.ClassificationOperational,
+		RetentionHint:  logcenter.RetentionHintShort,
+		Action:         "order.step",
+		Description:    "step completed",
+	})
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	batch := <-received
+	auditEvent := batch.Events[0]
+	stepEvent := batch.Events[1]
+	if auditEvent.EventID != "audit-1" || auditEvent.Classification != logcenter.ClassificationAudit || auditEvent.RetentionHint != logcenter.RetentionHintAudit {
+		t.Fatalf("audit event = %#v, want audit hints", auditEvent)
+	}
+	if stepEvent.EventID != "step-1" || stepEvent.Classification != logcenter.ClassificationOperational || stepEvent.RetentionHint != logcenter.RetentionHintShort {
+		t.Fatalf("step event = %#v, want operation hints", stepEvent)
 	}
 }
 
@@ -383,6 +926,68 @@ func TestHTTPMiddlewareOptionsCollectRouteTemplateAndIdentity(t *testing.T) {
 	}
 	if started.Metadata["request_class"] != "api" {
 		t.Fatalf("metadata request_class = %v, want api", started.Metadata["request_class"])
+	}
+}
+
+func TestHTTPMiddlewareCapturesAllowedRequestBodyAndRestoresBody(t *testing.T) {
+	received := make(chan capturedBatch, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var batch capturedBatch
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			t.Fatalf("decode batch: %v", err)
+		}
+		received <- batch
+		_, _ = w.Write([]byte(`{"batch_id":"ok","received":2,"accepted":2,"duplicated":0,"rejected":0,"errors":[]}`))
+	}))
+	defer server.Close()
+
+	client := logcenter.NewClient(logcenter.Config{
+		Endpoint:      server.URL,
+		APIKey:        "test-api-key",
+		Environment:   "test",
+		Service:       "http-api",
+		FlushInterval: time.Hour,
+		BufferSize:    10,
+		BatchSize:     10,
+	})
+	defer client.Close(context.Background())
+
+	handler := client.HTTPMiddleware(
+		logcenter.HTTPRequestBodyCaptureFunc(func(r *http.Request) bool {
+			return r.URL.Path == "/capture"
+		}, 1024, "application/json"),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read restored body: %v", err)
+		}
+		if !strings.Contains(string(body), "secret") {
+			t.Fatalf("handler body = %q, want original body restored", body)
+		}
+		client.Info(r.Context(), "body consumed", nil)
+		w.WriteHeader(http.StatusCreated)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/capture", strings.NewReader(`{"name":"visible","api_key":"secret"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	started := (<-received).Events[0]
+	body := started.Data["request_body"].(map[string]any)
+	value := body["value"].(map[string]any)
+	if value["name"] != "visible" {
+		t.Fatalf("captured body = %#v, want visible name", value)
+	}
+	if value["api_key"] != "[REDACTED]" {
+		t.Fatalf("api_key = %v, want redacted", value["api_key"])
+	}
+	if body["truncated"] != false || body["encoding"] != "json" {
+		t.Fatalf("request_body = %#v, want non-truncated json", body)
 	}
 }
 

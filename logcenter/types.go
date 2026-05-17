@@ -25,17 +25,33 @@ const (
 	StatusRetrying = "retrying"
 
 	SeverityError = "error"
+
+	ClassificationOperational = "operational"
+	ClassificationSecurity    = "security"
+	ClassificationAudit       = "audit"
+	ClassificationCritical    = "critical"
+	ClassificationPrivacy     = "privacy"
+
+	RetentionHintDefault  = "default"
+	RetentionHintShort    = "short"
+	RetentionHintStandard = "standard"
+	RetentionHintLong     = "long"
+	RetentionHintAudit    = "audit"
+	RetentionHintPrivacy  = "privacy"
 )
 
 type Fields map[string]any
 
 type Event struct {
 	EventID        string `json:"event_id"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 	EventType      string `json:"event_type"`
 	OccurredAt     string `json:"occurred_at"`
 	Environment    string `json:"environment"`
 	Service        string `json:"service"`
 	ServiceVersion string `json:"service_version,omitempty"`
+	Classification string `json:"classification,omitempty"`
+	RetentionHint  string `json:"retention_hint,omitempty"`
 	RequestID      string `json:"request_id,omitempty"`
 	TraceID        string `json:"trace_id,omitempty"`
 	SpanID         string `json:"span_id,omitempty"`
@@ -82,31 +98,37 @@ type Change struct {
 }
 
 type ErrorOptions struct {
-	Code        string
-	Type        string
-	Severity    string
-	Fingerprint string
-	StackTrace  string
-	Message     string
-	Metadata    Fields
-	Data        Fields
+	IdempotencyKey string
+	Classification string
+	RetentionHint  string
+	Code           string
+	Type           string
+	Severity       string
+	Fingerprint    string
+	StackTrace     string
+	Message        string
+	Metadata       Fields
+	Data           Fields
 }
 
 type AuditEvent struct {
-	ActorType  string
-	ActorID    string
-	TenantID   string
-	Operation  string
-	Action     string
-	EntityType string
-	EntityID   string
-	FieldName  string
-	OldValue   any
-	NewValue   any
-	Changes    []Change
-	Reason     string
-	Metadata   Fields
-	Data       Fields
+	IdempotencyKey string
+	Classification string
+	RetentionHint  string
+	ActorType      string
+	ActorID        string
+	TenantID       string
+	Operation      string
+	Action         string
+	EntityType     string
+	EntityID       string
+	FieldName      string
+	OldValue       any
+	NewValue       any
+	Changes        []Change
+	Reason         string
+	Metadata       Fields
+	Data           Fields
 }
 
 type batchRequest struct {
