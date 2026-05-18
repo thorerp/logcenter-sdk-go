@@ -36,6 +36,7 @@ func TestConfigFromEnvReadsSupportedVariables(t *testing.T) {
 	t.Setenv("LOGCENTER_MAX_DATA_BYTES", "4000")
 	t.Setenv("LOGCENTER_MAX_AUDIT_VALUE_BYTES", "5000")
 	t.Setenv("LOGCENTER_MAX_EVENT_BYTES", "6000")
+	t.Setenv("LOGCENTER_MAX_BATCH_BYTES", "7000")
 
 	config, err := ConfigFromEnv()
 	if err != nil {
@@ -86,8 +87,8 @@ func TestConfigFromEnvReadsSupportedVariables(t *testing.T) {
 	if len(config.SensitiveKeyFragments) != 2 || config.SensitiveKeyFragments[0] != "custom_secret" || config.SensitiveKeyFragments[1] != "session_id" {
 		t.Fatalf("SensitiveKeyFragments = %#v", config.SensitiveKeyFragments)
 	}
-	if config.MaxStringBytes != 2000 || config.MaxMetadataBytes != 3000 || config.MaxDataBytes != 4000 || config.MaxAuditValueBytes != 5000 || config.MaxEventBytes != 6000 {
-		t.Fatalf("limits = %d/%d/%d/%d/%d", config.MaxStringBytes, config.MaxMetadataBytes, config.MaxDataBytes, config.MaxAuditValueBytes, config.MaxEventBytes)
+	if config.MaxStringBytes != 2000 || config.MaxMetadataBytes != 3000 || config.MaxDataBytes != 4000 || config.MaxAuditValueBytes != 5000 || config.MaxEventBytes != 6000 || config.MaxBatchBytes != 7000 {
+		t.Fatalf("limits = %d/%d/%d/%d/%d/%d", config.MaxStringBytes, config.MaxMetadataBytes, config.MaxDataBytes, config.MaxAuditValueBytes, config.MaxEventBytes, config.MaxBatchBytes)
 	}
 }
 
@@ -141,6 +142,7 @@ func TestConfigFromEnvRejectsInvalidValues(t *testing.T) {
 		{name: "max data", key: "LOGCENTER_MAX_DATA_BYTES", value: "large", wantError: "LOGCENTER_MAX_DATA_BYTES"},
 		{name: "max audit", key: "LOGCENTER_MAX_AUDIT_VALUE_BYTES", value: "large", wantError: "LOGCENTER_MAX_AUDIT_VALUE_BYTES"},
 		{name: "max event", key: "LOGCENTER_MAX_EVENT_BYTES", value: "large", wantError: "LOGCENTER_MAX_EVENT_BYTES"},
+		{name: "max batch", key: "LOGCENTER_MAX_BATCH_BYTES", value: "large", wantError: "LOGCENTER_MAX_BATCH_BYTES"},
 	}
 
 	for _, tt := range tests {

@@ -90,6 +90,8 @@ func ValidateEvent(event Event) error {
 		return validateErrorEvent(event)
 	case EventTypeAuditEvent:
 		return validateAuditEvent(event)
+	case EventTypeFiscalProviderExchange:
+		return validateFiscalProviderExchangeEvent(event)
 	default:
 		return fmt.Errorf("%w: unsupported event_type %q", ErrInvalidEvent, event.EventType)
 	}
@@ -195,6 +197,16 @@ func validateAuditEvent(event Event) error {
 	return nil
 }
 
+func validateFiscalProviderExchangeEvent(event Event) error {
+	if strings.TrimSpace(event.Operation) == "" {
+		return requiredEventField("operation")
+	}
+	if len(event.Data) == 0 {
+		return requiredEventField("data")
+	}
+	return nil
+}
+
 func validateChanges(value any) error {
 	if value == nil {
 		return nil
@@ -268,12 +280,8 @@ func validateJSONValue(field string, value any) error {
 	if value == nil {
 		return nil
 	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
+	if _, err := json.Marshal(value); err != nil {
 		return fmt.Errorf("%w: %s must be valid JSON", ErrInvalidEvent, field)
-	}
-	if len(encoded) > MaxJSONValueBytes {
-		return fmt.Errorf("%w: %s is too large", ErrInvalidEvent, field)
 	}
 	return nil
 }

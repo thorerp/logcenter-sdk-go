@@ -64,7 +64,7 @@ func (limiter limiter) limitEvent(event Event) (Event, error) {
 			return event, fmt.Errorf("%w: event must be valid JSON: %w", ErrInvalidEvent, err)
 		}
 		if len(encoded) > limiter.maxEventBytes {
-			return event, fmt.Errorf("%w: event exceeds max_event_bytes", ErrInvalidEvent)
+			return event, fmt.Errorf("%w: event exceeds max_event_bytes: limit_bytes=%d actual_bytes=%d", ErrInvalidEvent, limiter.maxEventBytes, len(encoded))
 		}
 	}
 	return event, nil

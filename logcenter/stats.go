@@ -7,6 +7,7 @@ import (
 
 type Stats struct {
 	Queued        uint64 `json:"queued"`
+	Truncated     uint64 `json:"truncated"`
 	Dropped       uint64 `json:"dropped"`
 	SentEvents    uint64 `json:"sent_events"`
 	SentBatches   uint64 `json:"sent_batches"`
@@ -20,6 +21,7 @@ type Stats struct {
 
 type counters struct {
 	queued        atomic.Uint64
+	truncated     atomic.Uint64
 	dropped       atomic.Uint64
 	sentEvents    atomic.Uint64
 	sentBatches   atomic.Uint64
@@ -40,6 +42,7 @@ func (counters *counters) snapshot() Stats {
 
 	return Stats{
 		Queued:        counters.queued.Load(),
+		Truncated:     counters.truncated.Load(),
 		Dropped:       counters.dropped.Load(),
 		SentEvents:    counters.sentEvents.Load(),
 		SentBatches:   counters.sentBatches.Load(),

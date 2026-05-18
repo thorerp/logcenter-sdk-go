@@ -503,6 +503,7 @@ func TestCustomSensitiveKeyFragmentsRedactClientEvents(t *testing.T) {
 
 func TestPayloadLimitsTruncateStringsMetadataDataAndAuditValues(t *testing.T) {
 	received := make(chan capturedBatch, 1)
+	truncated := make(chan logcenter.EventTruncation, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var batch capturedBatch
 		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
@@ -526,6 +527,11 @@ func TestPayloadLimitsTruncateStringsMetadataDataAndAuditValues(t *testing.T) {
 		MaxDataBytes:       80,
 		MaxAuditValueBytes: 80,
 		MaxEventBytes:      2048,
+		Hooks: logcenter.Hooks{
+			OnEventTruncated: func(truncation logcenter.EventTruncation) {
+				truncated <- truncation
+			},
+		},
 	})
 	defer client.Close(context.Background())
 
@@ -555,6 +561,19 @@ func TestPayloadLimitsTruncateStringsMetadataDataAndAuditValues(t *testing.T) {
 
 	if err := client.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush() error = %v", err)
+	}
+	if stats := client.Stats(); stats.Truncated != 2 {
+		t.Fatalf("Truncated = %d, want 2", stats.Truncated)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case event := <-truncated:
+			if event.Reason != "payload_limit" {
+				t.Fatalf("truncation reason = %q, want payload_limit", event.Reason)
+			}
+		default:
+			t.Fatalf("missing truncation hook %d", i+1)
+		}
 	}
 
 	batch := <-received
@@ -599,6 +618,99 @@ func TestPayloadLimitsRejectEventThatStillExceedsMaxEventBytes(t *testing.T) {
 	}
 	if !strings.Contains(stats.LastError, "max_event_bytes") {
 		t.Fatalf("LastError = %q, want max_event_bytes", stats.LastError)
+	}
+}
+
+func TestPayloadLimitsAllowLargeFiscalProviderExchangeData(t *testing.T) {
+	received := make(chan capturedBatch, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var batch capturedBatch
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			t.Fatalf("decode batch: %v", err)
+		}
+		received <- batch
+		_, _ = w.Write([]byte(`{"batch_id":"ok","received":1,"accepted":1,"duplicated":0,"rejected":0,"errors":[]}`))
+	}))
+	defer server.Close()
+
+	requestPayload := strings.Repeat("A", 70*1024)
+	responsePayload := strings.Repeat("B", 80*1024)
+	client := logcenter.NewClient(logcenter.Config{
+		Endpoint:           server.URL,
+		APIKey:             "test-api-key",
+		Environment:        "development",
+		Service:            "fiscalpro-api",
+		FlushInterval:      time.Hour,
+		BufferSize:         10,
+		BatchSize:          10,
+		MaxDataBytes:       512 * 1024,
+		MaxMetadataBytes:   256 * 1024,
+		MaxAuditValueBytes: 256 * 1024,
+		MaxEventBytes:      1024 * 1024,
+		MaxBatchBytes:      2 * 1024 * 1024,
+	})
+	defer client.Close(context.Background())
+
+	if !client.SendEvent(context.Background(), logcenter.Event{
+		EventType: logcenter.EventTypeFiscalProviderExchange,
+		Operation: "ACBr NFe autorizar",
+		Data: logcenter.Fields{
+			"provider_request_payload_b64":  requestPayload,
+			"provider_response_payload_b64": responsePayload,
+		},
+	}) {
+		t.Fatalf("SendEvent() = false, stats = %#v", client.Stats())
+	}
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	batch := <-received
+	if len(batch.Events) != 1 {
+		t.Fatalf("events = %d, want 1", len(batch.Events))
+	}
+	event := batch.Events[0]
+	if event.EventType != logcenter.EventTypeFiscalProviderExchange {
+		t.Fatalf("event type = %q", event.EventType)
+	}
+	if event.Data["provider_request_payload_b64"] != requestPayload || event.Data["provider_response_payload_b64"] != responsePayload {
+		t.Fatal("provider payloads were not preserved")
+	}
+	if stats := client.Stats(); stats.Truncated != 0 || stats.Dropped != 0 {
+		t.Fatalf("stats = %#v, want no truncation/drop", stats)
+	}
+}
+
+func TestPayloadLimitsRejectBatchAboveMaxBatchBytes(t *testing.T) {
+	client := logcenter.NewClient(logcenter.Config{
+		Endpoint:           "<logcenter-endpoint>",
+		APIKey:             "test-api-key",
+		FlushInterval:      time.Hour,
+		BufferSize:         10,
+		BatchSize:          10,
+		MaxDataBytes:       4096,
+		MaxMetadataBytes:   4096,
+		MaxAuditValueBytes: 4096,
+		MaxEventBytes:      4096,
+		MaxBatchBytes:      128,
+	})
+	defer client.Close(context.Background())
+
+	if !client.SendEvent(context.Background(), logcenter.Event{
+		EventType: logcenter.EventTypeLogEvent,
+		Level:     logcenter.LevelInfo,
+		Message:   strings.Repeat("x", 256),
+	}) {
+		t.Fatalf("SendEvent() = false, stats = %#v", client.Stats())
+	}
+	err := client.Flush(context.Background())
+	if err == nil {
+		t.Fatal("Flush() error = nil, want max_batch_bytes error")
+	}
+	if !strings.Contains(err.Error(), "max_batch_bytes") ||
+		!strings.Contains(err.Error(), "limit_bytes=128") ||
+		!strings.Contains(err.Error(), "actual_bytes=") {
+		t.Fatalf("error = %q, want clear batch size details", err.Error())
 	}
 }
 

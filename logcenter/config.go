@@ -10,12 +10,13 @@ import (
 const Version = "0.1.0"
 
 const (
-	DefaultMaxStringBytes     = 8 * 1024
-	DefaultMaxMetadataBytes   = 64 * 1024
-	DefaultMaxDataBytes       = 64 * 1024
-	DefaultMaxAuditValueBytes = 64 * 1024
-	DefaultMaxEventBytes      = 256 * 1024
-	MaxJSONValueBytes         = 64 * 1024
+	DefaultMaxStringBytes     = 0
+	DefaultMaxMetadataBytes   = 1024 * 1024
+	DefaultMaxDataBytes       = 5 * 1024 * 1024
+	DefaultMaxAuditValueBytes = 1024 * 1024
+	DefaultMaxEventBytes      = 5 * 1024 * 1024
+	DefaultMaxBatchBytes      = 20 * 1024 * 1024
+	MaxJSONValueBytes         = DefaultMaxEventBytes
 )
 
 type Config struct {
@@ -45,6 +46,7 @@ type Config struct {
 	MaxDataBytes          int
 	MaxAuditValueBytes    int
 	MaxEventBytes         int
+	MaxBatchBytes         int
 }
 
 func Bool(value bool) *bool {
@@ -93,17 +95,20 @@ func (config Config) normalized() Config {
 	if config.MaxStringBytes <= 0 {
 		config.MaxStringBytes = DefaultMaxStringBytes
 	}
-	if config.MaxMetadataBytes <= 0 || config.MaxMetadataBytes > MaxJSONValueBytes {
+	if config.MaxMetadataBytes <= 0 {
 		config.MaxMetadataBytes = DefaultMaxMetadataBytes
 	}
-	if config.MaxDataBytes <= 0 || config.MaxDataBytes > MaxJSONValueBytes {
+	if config.MaxDataBytes <= 0 {
 		config.MaxDataBytes = DefaultMaxDataBytes
 	}
-	if config.MaxAuditValueBytes <= 0 || config.MaxAuditValueBytes > MaxJSONValueBytes {
+	if config.MaxAuditValueBytes <= 0 {
 		config.MaxAuditValueBytes = DefaultMaxAuditValueBytes
 	}
 	if config.MaxEventBytes <= 0 {
 		config.MaxEventBytes = DefaultMaxEventBytes
+	}
+	if config.MaxBatchBytes <= 0 {
+		config.MaxBatchBytes = DefaultMaxBatchBytes
 	}
 	return config
 }

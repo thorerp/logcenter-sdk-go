@@ -83,6 +83,9 @@ func configFromLookup(lookup func(string) (string, bool)) (Config, error) {
 	if config.MaxEventBytes, err = envInt(lookup, "LOGCENTER_MAX_EVENT_BYTES"); err != nil {
 		return Config{}, err
 	}
+	if config.MaxBatchBytes, err = envInt(lookup, "LOGCENTER_MAX_BATCH_BYTES"); err != nil {
+		return Config{}, err
+	}
 	return config, nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -200,10 +201,15 @@ func (client *Client) enqueue(event Event) bool {
 func (client *Client) prepareEvent(event Event) (Event, error) {
 	event = client.withDefaults(event)
 	event = client.redactor.redactEvent(event)
+	beforeLimit := event
 	var err error
 	event, err = client.limiter.limitEvent(event)
 	if err != nil {
 		return event, err
+	}
+	if !reflect.DeepEqual(beforeLimit, event) {
+		client.stats.truncated.Add(1)
+		client.eventTruncated(beforeLimit, event, "payload_limit")
 	}
 	event, err = client.applyTamperEvidence(event)
 	if err != nil {
@@ -416,6 +422,9 @@ func (client *Client) postBatch(ctx context.Context, payload batchRequest) (Batc
 	if err != nil {
 		return BatchResponse{}, err
 	}
+	if client.config.MaxBatchBytes > 0 && len(requestBody) > client.config.MaxBatchBytes {
+		return BatchResponse{}, fmt.Errorf("logcenter batch exceeds max_batch_bytes: limit_bytes=%d actual_bytes=%d", client.config.MaxBatchBytes, len(requestBody))
+	}
 
 	requestContext, cancel := context.WithTimeout(ctx, client.config.SendTimeout)
 	defer cancel()
@@ -496,6 +505,19 @@ func (client *Client) eventDropped(event Event, reason string, err error) {
 			Event:  event,
 			Reason: reason,
 			Err:    err,
+		})
+	})
+}
+
+func (client *Client) eventTruncated(before Event, after Event, reason string) {
+	if client.config.Hooks.OnEventTruncated == nil {
+		return
+	}
+	callHook(func() {
+		client.config.Hooks.OnEventTruncated(EventTruncation{
+			Before: before,
+			After:  after,
+			Reason: reason,
 		})
 	})
 }

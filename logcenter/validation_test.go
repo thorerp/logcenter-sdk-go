@@ -86,6 +86,23 @@ func TestValidateEventRejectsInvalidClassificationAndRetentionHint(t *testing.T)
 	}
 }
 
+func TestValidateEventAcceptsFiscalProviderExchange(t *testing.T) {
+	err := ValidateEvent(Event{
+		EventID:     "evt_fiscal_provider",
+		EventType:   EventTypeFiscalProviderExchange,
+		OccurredAt:  formatTime(time.Now()),
+		Environment: "test",
+		Service:     "orders-api",
+		Operation:   "provider.exchange",
+		Data: Fields{
+			"provider_request_payload_b64": strings.Repeat("A", 70*1024),
+		},
+	})
+	if err != nil {
+		t.Fatalf("ValidateEvent() error = %v", err)
+	}
+}
+
 func validLogEvent() Event {
 	return Event{
 		EventID:     "evt_1",
