@@ -652,7 +652,7 @@ func TestPayloadLimitsAllowLargeFiscalProviderExchangeData(t *testing.T) {
 	defer client.Close(context.Background())
 
 	if !client.SendEvent(context.Background(), logcenter.Event{
-		EventType: logcenter.EventTypeFiscalProviderExchange,
+		EventType: logcenter.EventTypeExternalProviderExchange,
 		Operation: "ACBr NFe autorizar",
 		Data: logcenter.Fields{
 			"provider_request_payload_b64":  requestPayload,
@@ -670,7 +670,7 @@ func TestPayloadLimitsAllowLargeFiscalProviderExchangeData(t *testing.T) {
 		t.Fatalf("events = %d, want 1", len(batch.Events))
 	}
 	event := batch.Events[0]
-	if event.EventType != logcenter.EventTypeFiscalProviderExchange {
+	if event.EventType != logcenter.EventTypeExternalProviderExchange {
 		t.Fatalf("event type = %q", event.EventType)
 	}
 	if event.Data["provider_request_payload_b64"] != requestPayload || event.Data["provider_response_payload_b64"] != responsePayload {

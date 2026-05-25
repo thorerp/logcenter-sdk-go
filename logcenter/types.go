@@ -3,12 +3,14 @@ package logcenter
 import "time"
 
 const (
-	EventTypeRequestStarted         = "request_started"
-	EventTypeRequestFinished        = "request_finished"
-	EventTypeSpan                   = "span"
-	EventTypeLogEvent               = "log_event"
-	EventTypeErrorEvent             = "error_event"
-	EventTypeAuditEvent             = "audit_event"
+	EventTypeRequestStarted           = "request_started"
+	EventTypeRequestFinished          = "request_finished"
+	EventTypeSpan                     = "span"
+	EventTypeLogEvent                 = "log_event"
+	EventTypeErrorEvent               = "error_event"
+	EventTypeAuditEvent               = "audit_event"
+	EventTypeExternalProviderExchange = "external_provider_exchange"
+	// Deprecated: use EventTypeExternalProviderExchange.
 	EventTypeFiscalProviderExchange = "fiscal_provider_exchange"
 
 	LevelDebug = "debug"

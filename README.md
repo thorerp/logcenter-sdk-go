@@ -832,6 +832,22 @@ Tipos de evento aceitos:
 | `log_event` | `Debug`, `Info`, `Warn`, `ErrorLog`, `Fatal`, `Log`, `OperationEvent` | `level`, `message` |
 | `error_event` | `RecordError` ou `Error` | `severity` e `error_code` ou `error_message` |
 | `audit_event` | `Audit` | `action`, `entity_type`, `entity_id`, `changes` ou `old_value/new_value` |
+| `external_provider_exchange` | `ExternalProviderExchange` ou `ExternalProviderExchangeSync` | `operation`, `data` |
+
+Exemplo de provider externo:
+
+```go
+client.ExternalProviderExchange(ctx, logcenter.ExternalProviderExchange{
+	Provider:             "acbr",
+	Method:               "POST",
+	Endpoint:             "/nfe",
+	StatusCode:           200,
+	RequestPayloadBytes:  requestPayload,
+	ResponsePayloadBytes: responsePayload,
+})
+```
+
+O helper grava payload JSON como dado estruturado em `data`, payload nao JSON como base64, e permite informar `RequestOmittedReason` ou `ResponseOmittedReason` quando o payload nao deve ser enviado.
 
 ## Status e constantes
 
@@ -853,7 +869,10 @@ Tipos de evento:
 - `logcenter.EventTypeLogEvent`
 - `logcenter.EventTypeErrorEvent`
 - `logcenter.EventTypeAuditEvent`
+- `logcenter.EventTypeExternalProviderExchange`
 - `logcenter.EventTypeFiscalProviderExchange`
+
+`EventTypeFiscalProviderExchange` esta deprecado. Use `EventTypeExternalProviderExchange` para novos emissores; o nome antigo continua aceito para compatibilidade.
 
 ## Flush, Close e Stats
 

@@ -90,7 +90,7 @@ func ValidateEvent(event Event) error {
 		return validateErrorEvent(event)
 	case EventTypeAuditEvent:
 		return validateAuditEvent(event)
-	case EventTypeFiscalProviderExchange:
+	case EventTypeExternalProviderExchange, EventTypeFiscalProviderExchange:
 		return validateFiscalProviderExchangeEvent(event)
 	default:
 		return fmt.Errorf("%w: unsupported event_type %q", ErrInvalidEvent, event.EventType)
